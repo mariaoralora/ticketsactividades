@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Tickets - Día de Colores</title>
+<link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+<style>
+  body { background: linear-gradient(135deg,#fff,#fff3f0); }
+  .tab-active { border-bottom: 3px solid #ff7aa2; font-weight:700; }
+  .small { font-size: 0.85rem; }
+</style>
+</head>
+<body class="p-4">
+  <div class="max-w-6xl mx-auto bg-white rounded-2xl shadow p-4">
+    <div class="flex items-start justify-between">
+      <div>
+        <h1 class="text-2xl font-bold mb-1">Tickets — Día de Colores</h1>
+        <p class="text-sm text-gray-600">Selecciona una actividad para ver/registrar tickets. Guardado en Google Sheets.</p>
+      </div>
+      <div class="text-right small">
+        <div id="autoStatus">Auto-refresh: ON (8s)</div>
+        <div id="lastSync">Última actualización: —</div>
+      </div>
+    </div>
+
+    <div id="tabs" class="flex flex-wrap gap-2 my-4"></div>
+
+    <div id="activityArea" class="mt-2"></div>
+  </div>
+
+<script>
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyE5lvolYEw4IsCMlyEHoLEj3nsQChyzX5NlplsdW4NzZC_ugMvO1BT7D1t3trdmlSNQw/exec";
+
+const ACTIVITIES = [
+  { nombre: "Húndelo en el mar", precio: 100 },
+  { nombre: "Encuentra el tesoro", precio: 35 },
+  { nombre: "Juego de memoria", precio: 25 },
+  { nombre: "Carrera de botes", precio: 30 },
+  { nombre: "Vete de Pesca", precio: 25 },
+  { nombre: "Just dance", precio: 30 },
+  { nombre: "Decora tu slime", precio: 125 },
+  { nombre: "Tiro al pulpo", precio: 25 },
+  { nombre: "Pinta carita", precio: 30 },
+  { nombre: "Inflables", precio: 50 },
+  { nombre: "Videojuegos", precio: 35 },
+  { nombre: "Simulador", precio: 60 },
+  { nombre: "Realidad virtual", precio: 100 },
+  { nombre: "Polaroid", precio: 100 },
+  { nombre: "Foto digital", precio: 60 },
+  { nombre: "VIP", precio: 100 }
+];
+
+let currentActivity = ACTIVITIES[0].nombre;
+let autoRefresh = true;
+const REFRESH_INTERVAL = 8000; // 8 segundos
+
+function createTabs(){
+  const tabs = document.getElementById('tabs');
+  tabs.innerHTML = '';
+  for (const a of ACTIVITIES){
+    const btn = document.createElement('button');
+    btn.className = 'px-3 py-1 rounded-md hover:bg-gray-100';
+    btn.innerText = a.nombre;
+    btn.onclick = ()=> { currentActivity = a.nombre; renderActivity(); updateActiveTab(); }
+    btn.dataset.name = a.nombre;
+    tabs.appendChild(btn);
+  }
+  updateActiveTab();
+}
+
+function updateActiveTab(){
+  document.querySelectorAll('#tabs button').forEach(b=>{
+    if (b.dataset.name === currentActivity) b.classList.add('tab-active');
+    else b.classList.remove('tab-active');
+  });
+}
+
+async function fetchRows(showCompleted=true){
+  const url = new URL(APPS_SCRIPT_URL);
+  url.searchParams.set('action','get');
+  url.searchParams.set('activity', currentActivity);
+  url.searchParams.set('showCompleted', showCompleted ? 'true' : 'false');
+  const res = await fetch(url);
+  const json = await res.json();
+  if (!json.success) throw new Error(json.error || 'Error al obtener filas');
+  return json.rows;
+}
+
+async function addRow(nombre, curso, cantidad){
+  const res = await fetch(APPS_SCRIPT_URL, {
+    method: 'POST',
+    body: JSON.stringify({ action:'add', activity: currentActivity, nombre, curso, cantidad }),
+    headers: { 'Content-Type':'application/json' }
+  });
+  const j = await res.json();
+  if (!j.success) throw new Error(j.error || 'Error al agregar');
+  await renderActivity();
+}
+
+async function markCompleted(rowIndex){
+  const res = await fetch(APPS_SCRIPT_URL, {
+    method: 'POST',
+    body: JSON.stringify({ action:'complete', activity: currentActivity, rowIndex }),
+    headers: { 'Content-Type':'application/json' }
+  });
+  const j = await res.json();
+  if (!j.success) alert('Error: ' + (j.error || ''));
+  await renderActivity();
+}
+
+function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+
+function formatRow(row){
+  return `<tr class="border-b">
+    <td class="p-2 text-sm">${row.rowIndex}</td>
+    <td class="p-2">${escapeHtml(row.nombre)}</td>
+    <td class="p-2">${escapeHtml(row.curso)}</td>
+    <td class="p-2 text-center">${row.cantidad}</td>
+    <td class="p-2 text-sm">${row.completado ? '<span class="text-green-600 font-semibold">Sí</span>' : 'No'}</td>
+    <td class="p-2 text-right">${row.precio || ''}</td>
+    <td class="p-2 text-right">${row.timestamp ? new Date(row.timestamp).toLocaleString() : ''}</td>
+    <td class="p-2 text-right">${row.completado ? '' : `<button data-row="${row.rowIndex}" class="complete-btn px-2 py-1 rounded bg-pink-100 hover:bg-pink-200 text-pink-800 text-xs">Completado</button>`}</td>
+  </tr>`;
+}
+
+async function renderActivity(){
+  const area = document.getElementById('activityArea');
+  area.innerHTML = `<p class="text-sm text-gray-500 mb-2">Cargando ${currentActivity}…</p>`;
+  try {
+    const rows = await fetchRows(true);
+    area.innerHTML = `
+      <div class="mb-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div class="p-3 border rounded">
+          <h3 class="font-semibold">${currentActivity}</h3>
+          <p class="text-sm text-gray-600">Precio: <strong>${getPrice(currentActivity)}</strong></p>
+          <form id="addForm" class="mt-3 space-y-2">
+            <input required name="nombre" placeholder="Nombre" class="w-full p-2 border rounded" />
+            <input required name="curso" placeholder="Curso" class="w-full p-2 border rounded" />
+            <input required name="cantidad" type="number" min="1" value="1" class="w-full p-2 border rounded" />
+            <div class="flex gap-2">
+              <button type="submit" class="px-3 py-2 rounded bg-pink-500 text-white">Registrar</button>
+              <button id="reloadBtn" type="button" class="px-3 py-2 rounded border">Actualizar</button>
+              <button id="toggleAuto" type="button" class="px-3 py-2 rounded border">Toggle Auto</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="p-3 border rounded md:col-span-2">
+          <div class="flex justify-between items-center mb-2">
+            <div>
+              <label class="text-sm">Buscar por nombre o curso</label>
+              <input id="searchInput" placeholder="Ej: Ana | 11B" class="ml-2 p-2 border rounded" />
+              <label class="inline-flex items-center ml-3 small"> Mostrar completados:
+                <input id="showCompleted" type="checkbox" checked class="ml-2" />
+              </label>
+            </div>
+            <div class="text-right small">
+              <div id="totales">Totales: —</div>
+              <div id="recaudo">Recaudado: —</div>
+            </div>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="w-full text-left">
+              <thead class="bg-gray-50">
+                <tr>
+                  <th class="p-2 text-xs">#</th><th class="p-2 text-xs">Nombre</th><th class="p-2 text-xs">Curso</th><th class="p-2 text-xs text-center">Cant</th><th class="p-2 text-xs">Completado</th><th class="p-2 text-xs">Precio</th><th class="p-2 text-xs">Fecha</th><th class="p-2 text-xs"></th>
+                </tr>
+              </thead>
+              <tbody id="rowsBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.getElementById('addForm').addEventListener('submit', async (ev)=>{
+      ev.preventDefault();
+      const fd = new FormData(ev.target);
+      const nombre = fd.get('nombre').trim();
+      const curso = fd.get('curso').trim();
+      const cantidad = Number(fd.get('cantidad')) || 1;
+      await addRow(nombre, curso, cantidad);
+      ev.target.reset();
+    });
+    document.getElementById('reloadBtn').addEventListener('click', renderActivity);
+    document.getElementById('toggleAuto').addEventListener('click', ()=>{
+      autoRefresh = !autoRefresh;
+      document.getElementById('autoStatus').innerText = `Auto-refresh: ${autoRefresh ? 'ON (8s)' : 'OFF'}`;
+    });
+    document.getElementById('showCompleted').addEventListener('change', async ()=>{ await renderActivityFiltered(); });
+    document.getElementById('searchInput').addEventListener('input', debounce(renderActivityFiltered, 300));
+
+    await renderActivityFiltered(rows);
+    document.getElementById('lastSync').innerText = 'Última actualización: ' + new Date().toLocaleTimeString();
+  } catch (err) {
+    area.innerHTML = `<div class="p-3 text-red-600">Error: ${escapeHtml(err.message || err)}</div>`;
+  }
+}
+
+function getPrice(name){ const a = ACTIVITIES.find(x=>x.nombre===name); return a ? a.precio : ''; }
+
+async function renderActivityFiltered(initialRows){
+  const showCompleted = document.getElementById('showCompleted') ? document.getElementById('showCompleted').checked : true;
+  const search = document.getElementById('searchInput') ? document.getElementById('searchInput').value.trim().toLowerCase() : '';
+  const rows = initialRows || await fetchRows(showCompleted);
+  const tbody = document.getElementById('rowsBody');
+  if (!tbody) return;
+  let filtered = rows;
+  if (search) {
+    filtered = rows.filter(r => (r.nombre||'').toLowerCase().includes(search) || (r.curso||'').toLowerCase().includes(search));
+  }
+  filtered.sort((a,b)=> new Date(b.timestamp) - new Date(a.timestamp));
+  tbody.innerHTML = filtered.map(formatRow).join('');
+
+  tbody.querySelectorAll('.complete-btn').forEach(btn=>{
+    btn.onclick = async ()=> {
+      const rowIndex = btn.dataset.row;
+      if (!confirm('Marcar como completado?')) return;
+      await markCompleted(Number(rowIndex));
+    };
+  });
+
+  const totalTickets = filtered.reduce((s,r)=> s + (Number(r.cantidad)||0), 0);
+  const price = getPrice(currentActivity) || 0;
+  const totalRecaudo = filtered.reduce((s,r)=> s + (Number(r.cantidad)||0) * Number(price), 0);
+  document.getElementById('totales').innerText = `Tickets: ${totalTickets} (${filtered.length} filas)`;
+  document.getElementById('recaudo').innerText = `Recaudado estimado: ${totalRecaudo}`;
+
+  document.getElementById('lastSync').innerText = 'Última actualización: ' + new Date().toLocaleTimeString();
+}
+
+function debounce(fn, t){ let to; return (...a)=>{ clearTimeout(to); to = setTimeout(()=>fn(...a), t); } }
+
+function startAutoRefresh(){
+  setInterval(async ()=>{
+    if (!autoRefresh) return;
+    try {
+      await renderActivity();
+    } catch(e){
+      console.log('Auto-refresh failed', e);
+    }
+  }, REFRESH_INTERVAL);
+}
+
+createTabs();
+renderActivity();
+startAutoRefresh();
+</script>
+</body>
+</html>
